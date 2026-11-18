@@ -2,7 +2,8 @@
 #include <cmath>
 #include "glad/glad.h"
 
-Sphere::Sphere(float radius, unsigned int sectorCount, unsigned int stackCount) {
+Sphere::Sphere(const std::string& sphereName, float radius, unsigned int sectorCount, unsigned int stackCount) {
+	this->sphereName = sphereName;
 	this->radius = radius;
 	this->sectorCount = sectorCount;
 	this->stackCount = stackCount;
@@ -33,7 +34,7 @@ void Sphere::draw() const {
 }
 
 void Sphere::setupVectors() {
-	float PI = acosf(-1.0); // cosine of 180 degrees is PI
+	float PI = std::acos(-1.0); // cosine of 180 degrees is PI
 	float TWO_PI = 2 * PI;
 	float HALF_PI = PI / 2;
 	float length = 1.0f / radius;
@@ -41,12 +42,12 @@ void Sphere::setupVectors() {
 	float stackStep = PI / stackCount;
 	for(unsigned int i{};i <= stackCount;++i) {
 		float phi = HALF_PI - i * stackStep;
-		float xy = radius * cosf(phi);
-		float z = radius * sinf(phi);
+		float xy = radius * std::cos(phi);
+		float z = radius * std::sin(phi);
 		for(unsigned int j{};j <= sectorCount;++j) {
 			float theta = j * sectorStep;
-			float x = xy * cosf(theta);	
-			float y = xy * sinf(theta);	
+			float x = xy * std::cos(theta);	
+			float y = xy * std::sin(theta);	
 			position.push_back(x);
 			position.push_back(y);
 			position.push_back(z);

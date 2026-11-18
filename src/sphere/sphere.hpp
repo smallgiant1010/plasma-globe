@@ -1,21 +1,25 @@
 #pragma once
-#include <vector>
+#include "abstract/primitive.hpp"
+#include <string>
 
-class Sphere {
+class Sphere : public Primitive {
 public:
-	Sphere(float radius, unsigned int sectorCount, unsigned int stackCount);
-	~Sphere();
-	Sphere(const Sphere& other);
-	void draw() const;
-private:
-	unsigned int radius;
-	unsigned int sectorCount;
-	unsigned int stackCount;
-	unsigned int VAO, VBO, EBO;
-	std::vector<float> position;
-	std::vector<float> normal;
-	std::vector<unsigned int> indices;
-	void setupVectors();
-	void setupObjects();
-};
+  Sphere(const std::string &sphereName, float radius, unsigned int sectorCount,
+         unsigned int stackCount);
+  ~Sphere() override;
+  Sphere(const Sphere &other);
+  void draw() const override;
+  const std::string &getName() const { return sphereName; }
+  float getRadius() const { return radius; }
 
+private:
+  float radius;
+  unsigned int sectorCount;
+  unsigned int stackCount;
+  unsigned int EBO;
+  std::string sphereName;
+  std::vector<float> normal;
+  std::vector<unsigned int> indices;
+  void setupVectors() override;
+  void setupObjects() override;
+};
