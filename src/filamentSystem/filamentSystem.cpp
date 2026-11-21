@@ -92,6 +92,7 @@ void FilamentSystem::setupObjects() {
   glBindVertexArray(VAO);
   glEnableVertexAttribArray(0);
   glEnableVertexAttribArray(1);
+  glEnableVertexAttribArray(2);
   glBindVertexArray(0);
   std::function<float(float)> firstFunction = [](const float t) -> float {
     return std::pow(1 - t, 3);
@@ -112,6 +113,21 @@ void FilamentSystem::setupObjects() {
     return std::pow(t, 3);
   };
   basis.push_back(fourthFunction);
+
+  std::function<float(float)> firstDerivativeFunction = [](const float t) -> float {
+    return 3 * std::pow(1 - t, 2);
+  };
+  basis.push_back(firstDerivativeFunction);
+
+  std::function<float(float)> secondDerivativeFunction = [](const float t) -> float {
+    return 6 * (1 - t) * t;
+  };
+  basis.push_back(secondDerivativeFunction);
+
+  std::function<float(float)> thirdDerivativeFunction = [](const float t) -> float {
+    return 3 * t * t;
+  };
+  basis.push_back(thirdDerivativeFunction);
 }
 
 float FilamentSystem::randomFloat(float min, float max){
