@@ -1,6 +1,5 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <glad/glad.h>
@@ -13,17 +12,16 @@
 
 #include "blur/blur.hpp"
 #include "camera/camera.hpp"
-#include "cone/cone.hpp"
 #include "filamentSystem/filamentSystem.hpp"
 #include "hdr/hdr.hpp"
 #include "quad/quad.hpp"
 #include "shader/shader.hpp"
 #include "sphere/sphere.hpp"
+#include "benchmark/benchmark.hpp"
 
 // macros/aliases
 #define MAX_WIDTH 800
 #define MAX_HEIGHT 600
-using Clock = std::chrono::steady_clock;
 
 // paths
 std::string innerSphereVertexShader =
@@ -60,24 +58,18 @@ constexpr float weights[5] = {0.227027f, 0.1945946f, 0.1216216f, 0.054054f,
 glm::vec3 pink(0.85, 0.02, 0.20);
 
 // global states
-float deltaTime{};
-float lastFrame{};
 float lastX = 400.0f;
 float lastY = 300.0f;
 bool firstMouseMovement = true;
 bool isLocked = false;
 bool wasPressed = false;
-float geometryGenerationTime{};
-float cpuDrawTime{};
-float gpuDrawTime{};
-float lastBenchmarkUpdate{};
-constexpr float INTERVAL = 0.5f;
-double cpuSum{};
-double gpuSum{};
-unsigned int sampleCount{};
+float deltaTime{};
+float lastFrame{};
+float lastGeometryGeneration{};
 
 // global objects
 Camera camera(45.0f, (float)MAX_WIDTH / (float)MAX_HEIGHT, 0.1f, 100.0f);
+Benchmark *benchmark;
 HDRBuffer *hdrBuffer;
 Blur *blur;
 
@@ -143,6 +135,7 @@ int main(void) {
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
 
+		benchmark = new Benchmark(0.5f);
     hdrBuffer = new HDRBuffer(0.5f, MAX_WIDTH, MAX_HEIGHT);
     blur = new Blur(3, MAX_WIDTH, MAX_HEIGHT);
 
@@ -196,50 +189,32 @@ int main(void) {
     Sphere innerElectrode("inner", 0.2f, 48, 24);
     Quad screenQuad;
 
-    auto start = Clock::now();
+		benchmark->startCPUClock();
     FilamentSystem filamentSystem;
     for (int i{}; i < 200; ++i) {
       filamentSystem.createDetailedFilament(innerElectrode.getRadius(),
                                             outerGlass.getRadius());
     }
-    auto end = Clock::now();
-    geometryGenerationTime =
-        std::chrono::duration<float, std::milli>(end - start).count();
-
-    GLuint timerQuery{};
-    GLuint64 elapsedNanoSeconds{};
-    glGenQueries(1, &timerQuery);
+    benchmark->endCPUClock();
+    lastGeometryGeneration = benchmark->getGeometryGenerationTime();
 
     while (!glfwWindowShouldClose(window)) {
       float currentFrame = glfwGetTime();
       deltaTime = currentFrame - lastFrame;
       lastFrame = currentFrame;
-
-      if (currentFrame - lastBenchmarkUpdate >= INTERVAL) {
-        if (sampleCount > 0) {
-          cpuDrawTime = cpuSum / sampleCount;
-          gpuDrawTime = gpuSum / sampleCount;
-        }
-        sampleCount = 0;
-        cpuSum = gpuSum = 0.0;
-        lastBenchmarkUpdate = currentFrame;
-      }
+			benchmark->calculateDrawTime(currentFrame);
       processInput(window);
 
       // first pass to fill the frame buffer
       hdrBuffer->bindFBO();
       renderObject(&innerSphereShader, &innerElectrode);
 
-      glBeginQuery(GL_TIME_ELAPSED, timerQuery);
-      start = Clock::now();
+			benchmark->startCPUClock();
+			benchmark->startGPUClock();
       renderFilaments(&filamentShader, &filamentSystem);
       renderContactSpots(&coneShader, &filamentSystem);
-      end = Clock::now();
-      cpuSum += std::chrono::duration<double, std::milli>(end - start).count();
-      glEndQuery(GL_TIME_ELAPSED);
-      glGetQueryObjectui64v(timerQuery, GL_QUERY_RESULT, &elapsedNanoSeconds);
-      gpuSum += elapsedNanoSeconds / 1'000'000.0;
-      sampleCount++;
+			benchmark->endCPUClock();
+			benchmark->endGPUClock();
 
       renderObject(&outerSphereShader, &outerGlass);
       hdrBuffer->unbindFBO();
@@ -265,6 +240,7 @@ int main(void) {
       glfwPollEvents();
     }
   }
+  delete benchmark;
   delete hdrBuffer;
   delete blur;
 
@@ -394,9 +370,9 @@ void drawImgui() {
       if (ImGui::BeginTabItem("Performance")) {
         ImGui::Text("FPS: %.0f", ImGui::GetIO().Framerate);
         ImGui::Text("Frame Time: %.3f ms", 1000.0f / ImGui::GetIO().Framerate);
-        ImGui::Text("CPU Geometry Time: %.3f ms", geometryGenerationTime);
-        ImGui::Text("CPU Draw Time: %.3f ms", cpuDrawTime);
-        ImGui::Text("GPU Draw Time: %.3f ms", gpuDrawTime);
+        ImGui::Text("CPU Geometry Time: %.3f ms", lastGeometryGeneration);
+        ImGui::Text("CPU Draw Time: %.3f ms", benchmark->getCPUDrawTime());
+        ImGui::Text("GPU Draw Time: %.3f ms", benchmark->getGPUDrawTime());
         ImGui::EndTabItem();
       }
       ImGui::EndTabBar();
