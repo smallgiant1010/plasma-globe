@@ -104,6 +104,8 @@ int main(void) {
 #ifdef __APPLE__
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
+	// allowing 4x MSAA
+	glfwWindowHint(GLFW_SAMPLES, 4);
 
   GLFWwindow *window =
       glfwCreateWindow(MAX_WIDTH, MAX_HEIGHT, "Plasma Globe", NULL, NULL);
@@ -131,6 +133,10 @@ int main(void) {
   ImGui_ImplOpenGL3_Init();
 
   {
+  	// Enable MSAA
+  	glEnable(GL_MULTISAMPLE);
+
+		// Manipulating depth and blend
     glEnable(GL_DEPTH_TEST);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_CULL_FACE);
