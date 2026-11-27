@@ -16,12 +16,13 @@ public:
   Filament(const std::vector<std::function<float(float)>> &basis, BezierData *bezierData, unsigned int VAO);
   ~Filament() override;
   Filament(const Filament &other);
-  Filament& operator=(const Filament&) = delete;
+  Filament& operator=(const Filament& other);
   const BezierData *getBezierData() const { return bezierData; }
   void draw() const override;
 private:
   const std::vector<std::function<float(float)>> *basis;
   BezierData *bezierData;
+  void cleanup();
   void setupVectors() override;
   void setupObjects() override;
 };

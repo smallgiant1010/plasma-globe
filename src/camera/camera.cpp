@@ -61,9 +61,9 @@ void Camera::ProcessScroll(double yOffset) {
 
 void Camera::recomputeVectors() {
   glm::vec3 direction;
-  direction.x = std::cosf(glm::radians(yaw)) * std::cosf(glm::radians(pitch));
-  direction.z = std::sinf(glm::radians(yaw)) * std::cosf(glm::radians(pitch));
-  direction.y = std::sinf(glm::radians(pitch));
+  direction.x = std::cos(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+  direction.z = std::sin(glm::radians(yaw)) * std::cos(glm::radians(pitch));
+  direction.y = std::sin(glm::radians(pitch));
   front = glm::normalize(direction);
 	glm::vec3 right = glm::normalize(glm::cross(front, glm::vec3(0.0f, 1.0f, 0.0f)));
 	up = glm::normalize(glm::cross(right, front));

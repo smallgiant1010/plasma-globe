@@ -2,43 +2,111 @@
 #include "glad/glad.h"
 #include <cmath>
 
-FilamentSystem::FilamentSystem(unsigned int segments) {
+FilamentSystem::FilamentSystem(float innerContactRadius, float outerContactRadius, float depth, unsigned int segments) {
+	this->innerContactRadius = innerContactRadius;
+	this->outerContactRadius = outerContactRadius;
+  this->depth = depth;
   this->segments = segments;
   setupObjects();
 }
 
-FilamentSystem::~FilamentSystem() {
-  glDeleteVertexArrays(1, &VAO);
-}
+FilamentSystem::~FilamentSystem() { cleanup(); }
 
 FilamentSystem::FilamentSystem(const FilamentSystem &other) {
   this->segments = other.segments;
+  this->depth = other.depth;
   this->generator = other.generator;
   setupObjects();
-  for(auto &filament : other.filaments) {
-		filaments.push_back(std::make_unique<Filament>(basis, new Filament::BezierData(*filament->getBezierData()), other.VAO));
+  for (auto &detailedFilament : other.detailedFilaments) {
+    Filament *filament = detailedFilament.first.get();
+    auto &cones = detailedFilament.second;
+    std::unique_ptr<Filament> newFilament = std::make_unique<Filament>(
+        basis, new Filament::BezierData(*filament->getBezierData()),
+        filamentVAO);
+    std::unique_ptr<Cone> inner = std::make_unique<Cone>(
+        new Cone::ConeData(*cones.first->getConeData()), coneVAO);
+    std::unique_ptr<Cone> outer = std::make_unique<Cone>(
+        new Cone::ConeData(*cones.second->getConeData()), coneVAO);
+    this->detailedFilaments.emplace(
+        std::move(newFilament),
+        std::make_pair(std::move(inner), std::move(outer)));
   }
 }
 
-void FilamentSystem::drawFilaments() const {
-  glBindVertexArray(VAO);
+FilamentSystem &FilamentSystem::operator=(const FilamentSystem &other) {
+  if (this != &other) {
+    basis.clear();
+    detailedFilaments.clear();
+    cleanup();
+    this->segments = other.segments;
+    this->depth = other.depth;
+    this->generator = other.generator;
+    setupObjects();
+    for (auto &detailedFilament : other.detailedFilaments) {
+      Filament *filament = detailedFilament.first.get();
+      auto &cones = detailedFilament.second;
+      std::unique_ptr<Filament> newFilament = std::make_unique<Filament>(
+          basis, new Filament::BezierData(*filament->getBezierData()),
+          filamentVAO);
+      std::unique_ptr<Cone> inner = std::make_unique<Cone>(
+          new Cone::ConeData(*cones.first->getConeData()), coneVAO);
+      std::unique_ptr<Cone> outer = std::make_unique<Cone>(
+          new Cone::ConeData(*cones.second->getConeData()), coneVAO);
+      this->detailedFilaments.emplace(
+          std::move(newFilament),
+          std::make_pair(std::move(inner), std::move(outer)));
+    }
+  }
 
-  for (auto &filament : filaments) {
-    filament->draw();
+  return *this;
+}
+
+void FilamentSystem::drawFilaments() const {
+  glBindVertexArray(filamentVAO);
+  for (auto &detailedFilament : detailedFilaments) {
+    detailedFilament.first->draw();
   }
 
   glBindVertexArray(0);
 }
 
-void FilamentSystem::addFilament(float innerRadius, float outerRadius) {
-	// generate random points on sphere
-	const float PI = std::acos(-1.0f);
-	float u = randomFloat(-1.0f, 1.0f);
-	float phi = randomFloat(0.0f, 2.0f * PI);
-	float xy = std::sqrt(1.0f - u * u);
-	glm::vec3 p0 = glm::vec3(innerRadius * xy * std::cos(phi), innerRadius * xy * std::sin(phi), innerRadius * u);
-	glm::vec3 p3 = p0 * (outerRadius / innerRadius);
+void FilamentSystem::drawContactSpots() const {
+  glBindVertexArray(coneVAO);
+  for (auto &detailedFilament : detailedFilaments) {
+    detailedFilament.second.first->draw();
+    detailedFilament.second.second->draw();
+  }
 
+  glBindVertexArray(0);
+}
+
+void FilamentSystem::createDetailedFilament(float innerRadius,
+                                            float outerRadius) {
+  std::pair<glm::vec3, glm::vec3> points =
+      randomSpherePoints(innerRadius, outerRadius);
+  std::unique_ptr<Filament> newFilament =
+      addFilament(points.first, points.second);
+  std::unique_ptr<Cone> inner =
+      addContactSpot(points.first, -glm::normalize(points.first), innerContactRadius);
+  std::unique_ptr<Cone> outer =
+      addContactSpot(points.second, glm::normalize(points.second), outerContactRadius);
+  detailedFilaments.emplace(std::move(newFilament),
+                            std::make_pair(std::move(inner), std::move(outer)));
+}
+
+void FilamentSystem::destroyDetailedFilament() {
+  if (detailedFilaments.empty())
+    return;
+  detailedFilaments.erase(detailedFilaments.begin());
+}
+
+void FilamentSystem::cleanup() {
+  glDeleteVertexArrays(1, &filamentVAO);
+  glDeleteVertexArrays(1, &coneVAO);
+}
+
+std::unique_ptr<Filament> FilamentSystem::addFilament(glm::vec3 p0,
+                                                      glm::vec3 p3) {
   // imaginary cylinder axis
   glm::vec3 axis = glm::normalize(p3 - p0);
   glm::vec3 reference = std::abs(axis.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f)
@@ -79,20 +147,42 @@ void FilamentSystem::addFilament(float innerRadius, float outerRadius) {
   // bezier data
   Filament::BezierData *data =
       new Filament::BezierData{p0, p1, p2, p3, segments};
-  filaments.push_back(std::make_unique<Filament>(basis, data, VAO));
+  return std::make_unique<Filament>(basis, data, filamentVAO);
 }
 
-void FilamentSystem::removeFilament() {
-	if(filaments.empty()) return;
-  filaments.pop_back();
+std::unique_ptr<Cone> FilamentSystem::addContactSpot(glm::vec3 p, glm::vec3 d,
+                                                     float radius) {
+  Cone::ConeData *data = new Cone::ConeData{p, d, radius, depth};
+  return std::make_unique<Cone>(data, coneVAO);
+}
+
+std::pair<glm::vec3, glm::vec3>
+FilamentSystem::randomSpherePoints(float innerRadius, float outerRadius) {
+  // generate random points on sphere
+  const float PI = std::acos(-1.0f);
+  float u = randomFloat(-1.0f, 1.0f);
+  float phi = randomFloat(0.0f, 2.0f * PI);
+  float xy = std::sqrt(1.0f - u * u);
+  glm::vec3 p0 = glm::vec3(innerRadius * xy * std::cos(phi),
+                           innerRadius * xy * std::sin(phi), innerRadius * u);
+  glm::vec3 p3 = p0 * (outerRadius / innerRadius);
+
+	// make the points a little inwards so the cones have space to render
+	p0 = glm::normalize(p0) * (innerRadius + depth);
+	p3 = glm::normalize(p3) * (outerRadius - depth);
+
+  return {p0, p3};
 }
 
 void FilamentSystem::setupObjects() {
-  glGenVertexArrays(1, &VAO);
-  glBindVertexArray(VAO);
+  glGenVertexArrays(1, &filamentVAO);
+  glBindVertexArray(filamentVAO);
   glEnableVertexAttribArray(0);
   glEnableVertexAttribArray(1);
   glEnableVertexAttribArray(2);
+  glGenVertexArrays(1, &coneVAO);
+  glBindVertexArray(coneVAO);
+  glEnableVertexAttribArray(0);
   glBindVertexArray(0);
   std::function<float(float)> firstFunction = [](const float t) -> float {
     return std::pow(1 - t, 3);
@@ -114,23 +204,20 @@ void FilamentSystem::setupObjects() {
   };
   basis.push_back(fourthFunction);
 
-  std::function<float(float)> firstDerivativeFunction = [](const float t) -> float {
-    return 3 * std::pow(1 - t, 2);
-  };
+  std::function<float(float)> firstDerivativeFunction =
+      [](const float t) -> float { return 3 * std::pow(1 - t, 2); };
   basis.push_back(firstDerivativeFunction);
 
-  std::function<float(float)> secondDerivativeFunction = [](const float t) -> float {
-    return 6 * (1 - t) * t;
-  };
+  std::function<float(float)> secondDerivativeFunction =
+      [](const float t) -> float { return 6 * (1 - t) * t; };
   basis.push_back(secondDerivativeFunction);
 
-  std::function<float(float)> thirdDerivativeFunction = [](const float t) -> float {
-    return 3 * t * t;
-  };
+  std::function<float(float)> thirdDerivativeFunction =
+      [](const float t) -> float { return 3 * t * t; };
   basis.push_back(thirdDerivativeFunction);
 }
 
-float FilamentSystem::randomFloat(float min, float max){
+float FilamentSystem::randomFloat(float min, float max) {
   std::uniform_real_distribution<float> dist(min, max);
   return dist(generator);
 }

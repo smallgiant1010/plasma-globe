@@ -11,12 +11,14 @@
 #include <imgui_impl_opengl3.h>
 #include <iostream>
 
+#include "blur/blur.hpp"
 #include "camera/camera.hpp"
+#include "cone/cone.hpp"
 #include "filamentSystem/filamentSystem.hpp"
+#include "hdr/hdr.hpp"
+#include "quad/quad.hpp"
 #include "shader/shader.hpp"
 #include "sphere/sphere.hpp"
-#include "quad/quad.hpp"
-#include "hdr/hdr.hpp"
 
 // macros/aliases
 #define MAX_WIDTH 800
@@ -36,6 +38,10 @@ std::string filamentVertexShader = "assets/filament_glsl/filament.vert.glsl";
 std::string filamentFragmentShader = "assets/filament_glsl/filament.frag.glsl";
 std::string hdrVertexShader = "assets/hdr_glsl/hdr.vert.glsl";
 std::string hdrFragmentShader = "assets/hdr_glsl/hdr.frag.glsl";
+std::string blurVertexShader = "assets/blur_glsl/blur.vert.glsl";
+std::string blurFragmentShader = "assets/blur_glsl/blur.frag.glsl";
+std::string coneVertexShader = "assets/cone_glsl/cone.vert.glsl";
+std::string coneFragmentShader = "assets/cone_glsl/cone.frag.glsl";
 
 // configurable properties
 glm::vec3 glassColor(0.61f, 0.66f, 0.71f);
@@ -45,6 +51,13 @@ glm::vec3 baseReflectivity(0.04f);
 constexpr float shininess = 64.0f;
 const float PI = std::acos(-1.0f);
 constexpr float width = 0.005f;
+constexpr float filamentEmissionIntensity = 10.0f;
+constexpr float contactEmissionIntensity = 4.0f;
+constexpr float filamentBloomStrength = 1.0f;
+constexpr float contactBloomStrength = 3.0f;
+constexpr float weights[5] = {0.227027f, 0.1945946f, 0.1216216f, 0.054054f,
+                              0.016216f};
+glm::vec3 pink(0.85, 0.02, 0.20);
 
 // global states
 float deltaTime{};
@@ -66,6 +79,7 @@ unsigned int sampleCount{};
 // global objects
 Camera camera(45.0f, (float)MAX_WIDTH / (float)MAX_HEIGHT, 0.1f, 100.0f);
 HDRBuffer *hdrBuffer;
+Blur *blur;
 
 // glfw related
 void processInput(GLFWwindow *window);
@@ -76,6 +90,9 @@ void scroll_callback(GLFWwindow *, double, double yOffset);
 // helper functions
 void renderObject(Shader *shader, Primitive *primitive);
 void renderFilaments(Shader *shader, FilamentSystem *filamentSystem);
+void renderContactSpots(Shader *shader, FilamentSystem *filamentSystem);
+void renderBlur(Shader *blurShader, Quad *screenQuad, bool &horizontal,
+                bool &first);
 void setupShaderMatrices(Shader *shader);
 void drawImgui();
 
@@ -120,22 +137,54 @@ int main(void) {
     glCullFace(GL_BACK);
     glFrontFace(GL_CCW);
 
-		hdrBuffer = new HDRBuffer(1.0f, MAX_WIDTH, MAX_HEIGHT);
+    hdrBuffer = new HDRBuffer(0.5f, MAX_WIDTH, MAX_HEIGHT);
+    blur = new Blur(3, MAX_WIDTH, MAX_HEIGHT);
 
     Shader outerSphereShader(outerSphereVertexShader,
                              outerSphereFragmentShader);
     outerSphereShader.use();
+    outerSphereShader.setVec3("material.ambient", glassColor);
+    outerSphereShader.setVec3("material.diffuse", glassColor);
+    outerSphereShader.setVec3("material.specular", glm::vec3(1.0f));
+    outerSphereShader.setFloat("material.shininess", shininess);
+    outerSphereShader.setVec3("light.ambient", glm::vec3(0.03f));
+    outerSphereShader.setVec3("light.diffuse", glm::vec3(0.8f));
+    outerSphereShader.setVec3("light.specular", glm::vec3(1.0f));
+    outerSphereShader.setVec3("light.direction", lightDirection);
+    outerSphereShader.setVec3("F0", baseReflectivity);
 
     Shader innerSphereShader(innerSphereVertexShader,
                              innerSphereFragmentShader);
     innerSphereShader.use();
+    innerSphereShader.setVec3("objectColor", innerSphereColor);
 
     Shader filamentShader(filamentVertexShader, filamentFragmentShader);
     filamentShader.use();
+    filamentShader.setFloat("emissionIntensity", filamentEmissionIntensity);
+    filamentShader.setFloat("bloomStrength", filamentBloomStrength);
+    filamentShader.setVec3("pink", pink);
+    filamentShader.setFloat("PI", PI);
+    filamentShader.setFloat("width", width);
 
-		Shader hdrShader(hdrVertexShader, hdrFragmentShader);
-		hdrShader.use();
-		hdrShader.setInt("hdrBuffer", 0);
+    Shader coneShader(coneVertexShader, coneFragmentShader);
+    coneShader.use();
+    coneShader.setVec3("pink", pink);
+    coneShader.setFloat("emissionIntensity", contactEmissionIntensity);
+    coneShader.setFloat("bloomStrength", contactBloomStrength);
+
+    Shader blurShader(blurVertexShader, blurFragmentShader);
+    blurShader.use();
+    blurShader.setInt("image", 0);
+    for (unsigned int i{}; i < (sizeof(weights) / sizeof(float)); ++i) {
+      blurShader.setFloat("weight[" + std::to_string(i) + "]",
+                          i[weights]); // feeling quirky
+    }
+
+    Shader hdrShader(hdrVertexShader, hdrFragmentShader);
+    hdrShader.use();
+    hdrShader.setInt("hdrBuffer", 0);
+    hdrShader.setInt("bloomBlur", 1);
+    hdrShader.setFloat("exposure", hdrBuffer->getExposure());
 
     Sphere outerGlass("outer", 1.0f, 48, 24);
     Sphere innerElectrode("inner", 0.2f, 48, 24);
@@ -144,8 +193,8 @@ int main(void) {
     auto start = Clock::now();
     FilamentSystem filamentSystem;
     for (int i{}; i < 200; ++i) {
-      filamentSystem.addFilament(innerElectrode.getRadius(),
-                                 outerGlass.getRadius());
+      filamentSystem.createDetailedFilament(innerElectrode.getRadius(),
+                                            outerGlass.getRadius());
     }
     auto end = Clock::now();
     geometryGenerationTime =
@@ -160,24 +209,25 @@ int main(void) {
       deltaTime = currentFrame - lastFrame;
       lastFrame = currentFrame;
 
-      if(currentFrame - lastBenchmarkUpdate >= INTERVAL) {	
-      	if(sampleCount > 0) {
-					cpuDrawTime = cpuSum / sampleCount;
-					gpuDrawTime = gpuSum / sampleCount;
-				}
-				sampleCount = 0;
-				cpuSum = gpuSum = 0.0;
-				lastBenchmarkUpdate = currentFrame;
+      if (currentFrame - lastBenchmarkUpdate >= INTERVAL) {
+        if (sampleCount > 0) {
+          cpuDrawTime = cpuSum / sampleCount;
+          gpuDrawTime = gpuSum / sampleCount;
+        }
+        sampleCount = 0;
+        cpuSum = gpuSum = 0.0;
+        lastBenchmarkUpdate = currentFrame;
       }
       processInput(window);
 
+      // first pass to fill the frame buffer
       hdrBuffer->bindFBO();
-
       renderObject(&innerSphereShader, &innerElectrode);
 
       glBeginQuery(GL_TIME_ELAPSED, timerQuery);
       start = Clock::now();
       renderFilaments(&filamentShader, &filamentSystem);
+      renderContactSpots(&coneShader, &filamentSystem);
       end = Clock::now();
       cpuSum += std::chrono::duration<double, std::milli>(end - start).count();
       glEndQuery(GL_TIME_ELAPSED);
@@ -186,19 +236,31 @@ int main(void) {
       sampleCount++;
 
       renderObject(&outerSphereShader, &outerGlass);
-
       hdrBuffer->unbindFBO();
+      glDisable(GL_DEPTH_TEST);
+      glDisable(GL_BLEND);
 
-      hdrBuffer->bindCBO();
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, hdrBuffer->getCBO()[1]);
+
+      hdrShader.use();
+      hdrShader.setInt("hdrBuffer", 0);
+
+      // second pass to set blur
+      bool horizontal = true, first = true;
+      renderBlur(&blurShader, &screenQuad, horizontal, first);
+
+      // third pass to render the scene with hdr and bloom
+      hdrBuffer->bindCBO(blur->getCBO()[!horizontal]);
       renderObject(&hdrShader, &screenQuad);
 
       drawImgui();
       glfwSwapBuffers(window);
       glfwPollEvents();
     }
-
-    delete hdrBuffer;
   }
+  delete hdrBuffer;
+  delete blur;
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
@@ -257,43 +319,57 @@ void scroll_callback(GLFWwindow *, double, double yOffset) {
 }
 
 void renderObject(Shader *shader, Primitive *primitive) {
+  shader->use();
   Sphere *sphere = dynamic_cast<Sphere *>(primitive);
   if (sphere) {
-		setupShaderMatrices(shader);
+    setupShaderMatrices(shader);
     if (sphere->getName() == "outer") {
       glEnable(GL_BLEND);
       glDepthMask(GL_FALSE);
-      shader->setVec3("material.ambient", glassColor);
-      shader->setVec3("material.diffuse", glassColor);
-      shader->setVec3("material.specular", glm::vec3(1.0f));
-      shader->setFloat("material.shininess", shininess);
-      shader->setVec3("light.ambient", glm::vec3(0.1f));
-      shader->setVec3("light.diffuse", glm::vec3(0.8f));
-      shader->setVec3("light.specular", glm::vec3(1.0f));
-      shader->setVec3("light.direction", lightDirection);
       shader->setVec3("viewPos", camera.getPosition());
-      shader->setVec3("F0", baseReflectivity);
-    } else if (sphere->getName() == "inner") {
-      shader->setVec3("objectColor", innerSphereColor);
     }
-  }
-  Quad *quad = dynamic_cast<Quad *>(primitive);
-  if(quad) {
-  	shader->use();
-  	shader->setFloat("exposure", hdrBuffer->getExposure());
   }
   primitive->draw();
 }
 
 void renderFilaments(Shader *shader, FilamentSystem *filamentSystem) {
+  shader->use();
   setupShaderMatrices(shader);
-  shader->setFloat("PI", PI);
-  shader->setFloat("width", width);
   filamentSystem->drawFilaments();
 }
 
-void setupShaderMatrices(Shader *shader) {
+void renderContactSpots(Shader *shader, FilamentSystem *filamentSystem) {
   shader->use();
+  glDisable(GL_CULL_FACE);
+  setupShaderMatrices(shader);
+  filamentSystem->drawContactSpots();
+  glEnable(GL_CULL_FACE);
+}
+
+void renderBlur(Shader *blurShader, Quad *screenQuad, bool &horizontal,
+                bool &first) {
+  glDisable(GL_DEPTH_TEST);
+  glDepthMask(GL_FALSE);
+  glDisable(GL_BLEND);
+  blurShader->use();
+  for (int i{}; i < blur->getAmount(); ++i) {
+    glBindFramebuffer(GL_FRAMEBUFFER, blur->getFBO()[horizontal]);
+    blurShader->setInt("horizontal", horizontal);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D,
+                  first ? hdrBuffer->getCBO()[1] : blur->getCBO()[!horizontal]);
+    renderObject(blurShader, screenQuad);
+    horizontal = !horizontal;
+    if (first)
+      first = false;
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glEnable(GL_DEPTH_TEST);
+  glDepthMask(GL_TRUE);
+  glEnable(GL_BLEND);
+}
+
+void setupShaderMatrices(Shader *shader) {
   glm::mat4 model(1.0f);
   shader->setMat4("model", model);
   shader->setMat4("view", camera.getViewMatrix());
@@ -310,7 +386,7 @@ void drawImgui() {
         ImGui::EndTabItem();
       }
       if (ImGui::BeginTabItem("Performance")) {
-				ImGui::Text("FPS: %.0f", ImGui::GetIO().Framerate);
+        ImGui::Text("FPS: %.0f", ImGui::GetIO().Framerate);
         ImGui::Text("Frame Time: %.3f ms", 1000.0f / ImGui::GetIO().Framerate);
         ImGui::Text("CPU Geometry Time: %.3f ms", geometryGenerationTime);
         ImGui::Text("CPU Draw Time: %.3f ms", cpuDrawTime);

@@ -12,25 +12,39 @@ Sphere::Sphere(const std::string& sphereName, float radius, unsigned int sectorC
 }
 
 Sphere::~Sphere() {
-	glDeleteVertexArrays(1, &VAO);
-	glDeleteBuffers(1, &VBO);
-	glDeleteBuffers(1, &EBO);
+	cleanup();
 }
 
 Sphere::Sphere(const Sphere& other) {
 	this->radius = other.radius;
 	this->sectorCount = other.sectorCount;
 	this->stackCount = other.stackCount;
-	this->position = other.position;
-	this->normal = other.normal;
-	this->indices = other.indices;
+	setupVectors();
 	setupObjects();
+}
+
+Sphere& Sphere::operator=(const Sphere& other) {
+	if(this != &other) {
+		cleanup();
+		this->radius = other.radius;
+		this->sectorCount = other.sectorCount;
+		this->stackCount = other.stackCount;
+		setupVectors();
+		setupObjects();
+	}
+	return *this;
 }
 
 void Sphere::draw() const {
 	glBindVertexArray(VAO);
 	glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, (void *)0);
 	glBindVertexArray(0);
+}
+
+void Sphere::cleanup() {
+	glDeleteVertexArrays(1, &VAO);
+	glDeleteBuffers(1, &VBO);
+	glDeleteBuffers(1, &EBO);
 }
 
 void Sphere::setupVectors() {

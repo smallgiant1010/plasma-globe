@@ -6,12 +6,13 @@ public:
 	Quad();
 	~Quad() override;
 	Quad(const Quad& other);
-	Quad& operator=(const Quad& other) = default;
+	Quad& operator=(const Quad& other);
 	void draw() const override;
 private:
 	unsigned int EBO;
 	std::vector<float> texCoords;
 	std::vector<unsigned int> indices;
+	void cleanup();
 	void setupVectors() override;
 	void setupObjects() override;
 };
